@@ -1,5 +1,7 @@
 # hh-cv-mcp
 
+**English** · [Русский](README.ru.md)
+
 An MCP server for **hh.ru**, the Russian-language job board (it also serves
 Kazakhstan, Belarus, Azerbaijan, Uzbekistan and more). It gives an LLM agent — or
 a person at a CLI — the full applicant surface of one hh account: search,
