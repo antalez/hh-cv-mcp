@@ -1,70 +1,71 @@
 # hh-cv-mcp
 
-**English** · [Русский](README.ru.md)
+**Русский** · [English](README.en.md)
 
-An MCP server for **hh.ru**, the Russian-language job board (it also serves
-Kazakhstan, Belarus, Azerbaijan, Uzbekistan and more). It gives an LLM agent — or
-a person at a CLI — the full applicant surface of one hh account: search,
-resumes, applications, cover letters, employer chat, and the analytics hh keeps
-mostly hidden.
+MCP-сервер для **hh.ru** (работает также с Казахстаном, Беларусью, Азербайджаном,
+Узбекистаном и другими регионами hh). Даёт LLM-агенту, или человеку в CLI,
+полную соискательскую поверхность одного аккаунта hh: поиск вакансий, резюме,
+отклики, сопроводительные письма, переписку с работодателями и ту аналитику,
+которую hh по большей части прячет.
 
-Two files, no third-party dependencies, stdio transport. Copy the folder, point
-it at a login cookie, and every tool works.
-
----
-
-## Why this exists
-
-hh discontinued its public applicant API on 2025-12-15. `api.hh.ru/vacancies` now
-returns `forbidden` from every origin. But hh's own website content-negotiates to
-JSON for a client holding a login session, so **everything the site does, this
-does too, over plain HTTP** — no browser, no scraping of rendered HTML, no token.
-The protocol was reverse-engineered by measurement, not read from docs (there are none).
+Два файла, без сторонних зависимостей, транспорт stdio. Скопируйте папку, укажите
+cookie от залогиненного аккаунта, и все инструменты работают.
 
 ---
 
-## Install
+## Зачем это нужно
 
-Copy this folder. That is the install. Python 3.10+, standard library only.
+hh закрыл публичный API для соискателей 2025-12-15: `api.hh.ru/vacancies` теперь
+отвечает `forbidden` с любого адреса. Но сайт hh сам отдаёт JSON клиенту с
+cookie от залогиненной сессии, поэтому **всё, что делает сайт, делает и этот
+сервер, по обычному HTTP**: без браузера, без парсинга HTML, без токена.
+Протокол восстановлен измерениями, а не по документации (её нет).
 
-### Get a session
+---
 
-Every tool needs a logged-in hh.ru cookie. **No browser automation required** —
-one cookie authenticates. In any browser logged into hh.ru:
-DevTools → Application → Cookies → `https://hh.ru`, copy the value of `hhtoken`
-(and `_xsrf` too if you want to write), then:
+## Установка
+
+Скопируйте эту папку. Это и есть установка. Python 3.10+, только стандартная
+библиотека.
+
+### Получить сессию
+
+Каждому инструменту нужен cookie залогиненного hh.ru. **Автоматизация браузера не
+требуется**, авторизует один cookie. В любом браузере, где вы вошли на hh.ru:
+DevTools → Application → Cookies → `https://hh.ru`, скопируйте значение `hhtoken`
+(и `_xsrf`, если нужны записи), затем:
 
 ```bash
 python3 hh_client.py session --cookie 'hhtoken=...; _xsrf=...'
-python3 hh_client.py whoami        # confirm which account you just saved
+python3 hh_client.py whoami        # проверить, какой аккаунт сохранён
 ```
 
-`session` with no arguments reads the same from stdin, and a whole `Cookie:`
-request header pasted verbatim also works. Cookies expire every few weeks; re-run
-`session` when calls start returning login pages.
+`session` без аргументов читает то же самое из stdin, и целиком вставленный
+заголовок `Cookie:` тоже подходит. Cookie живёт несколько недель; повторите
+`session`, когда вызовы начнут возвращать страницу логина.
 
-> Optional `--from-chrome` lifts cookies out of a running Chrome over CDP; it
-> needs `pip install playwright`. It is the fallback, not the path.
+> Необязательный `--from-chrome` вытягивает cookie из запущенного Chrome по CDP;
+> ему нужен `pip install playwright`. Это запасной путь, а не основной.
 
-### Mount it in a client
+### Подключить к клиенту
 
 **Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`
-on macOS):
+на macOS):
 
 ```jsonc
 {
   "mcpServers": {
     "hh": {
       "command": "python3",
-      "args": ["/abs/path/to/mcp/server.py"],
-      "env": { "HH_SESSION": "/abs/path/to/.hh_session.json" }
+      "args": ["/абсолютный/путь/к/server.py"],
+      "env": { "HH_SESSION": "/абсолютный/путь/к/.hh_session.json" }
     }
   }
 }
 ```
 
-**VS Code** (`.vscode/mcp.json`) — note it uses `servers`, not `mcpServers`, and
-wants an explicit `type`:
+**VS Code** (`.vscode/mcp.json`), обратите внимание: здесь ключ `servers`, а не
+`mcpServers`, и нужен явный `type`:
 
 ```jsonc
 {
@@ -72,86 +73,89 @@ wants an explicit `type`:
     "hh": {
       "type": "stdio",
       "command": "python3",
-      "args": ["/abs/path/to/mcp/server.py"],
-      "env": { "HH_SESSION": "/abs/path/to/.hh_session.json" }
+      "args": ["/абсолютный/путь/к/server.py"],
+      "env": { "HH_SESSION": "/абсолютный/путь/к/.hh_session.json" }
     }
   }
 }
 ```
 
-Set `HH_SESSION` explicitly rather than relying on discovery, so the server works
-whatever directory the client launches it from. Restart the client, then ask it
-`whoami` to confirm the mount.
+Задавайте `HH_SESSION` явно, а не полагайтесь на автопоиск, тогда сервер работает
+из любой директории, откуда его запускает клиент. Перезапустите клиент и спросите
+`whoami`, чтобы убедиться, что подключение живо.
 
-### Environment
+### Переменные окружения
 
-| variable | effect |
+| переменная | что делает |
 |---|---|
-| `HH_SESSION` | path to the cookie jar (else looked for beside the server, then one dir up) |
-| `HH_CURRENCY` | default currency for salary writes (`RUR` if unset; hh serves several countries) |
-| `HH_REFUSE_DASHES` | set to `1` to reject em/en dashes in anything you write (one user's house style, off by default) |
+| `HH_SESSION` | путь к файлу с cookie (иначе ищется рядом с сервером, потом на уровень выше) |
+| `HH_CURRENCY` | валюта по умолчанию для записи зарплаты (`RUR`, если не задано; hh работает в нескольких странах) |
+| `HH_REFUSE_DASHES` | `1`, чтобы отклонять тире (- -) в любом тексте на запись (личное правило одного пользователя, по умолчанию выключено) |
 
 ---
 
-## The one rule that matters
+## Единственное важное правило
 
-**This layer has no gate.** Every write executes the moment it is called: no
-confirm argument, no dry run, no vetting of text. `apply` applies. `chat_send`
-sends. `cv_push` overwrites a live CV. This is deliberate — deciding *whether* a
-write should happen belongs to the agent or human driving it, not to the tool.
+**У этого слоя нет гейта.** Любая запись выполняется в момент вызова: без
+подтверждения, без dry-run, без проверки текста. `apply` откликается. `chat_send`
+отправляет. `cv_push` перезаписывает живое резюме. Это сделано намеренно,
+решение о том, **стоит ли** делать запись, принимает агент или человек за ним, а
+не инструмент.
 
-The server's only defence is telling you the truth about what each tool does,
-through MCP annotations (`readOnlyHint` / `destructiveHint`). A good client reads
-those and asks before a destructive call.
+Единственная защита сервера, честно сообщать, что делает каждый инструмент,
+через аннотации MCP (`readOnlyHint` / `destructiveHint`). Хороший клиент читает их
+и спрашивает подтверждение перед разрушительным вызовом.
 
-**If you point an unattended LLM at this, put an approval gate in front of the 11
-write tools.** Suspend every write for a human to confirm before it executes
-(pydantic-ai's `ApprovalRequiredToolset` is one way). An LLM with `apply` and no
-gate will apply to things.
+**Если вы направляете на это автономную LLM, поставьте гейт подтверждения перед
+11 инструментами записи.** Приостанавливайте каждую запись до подтверждения
+человеком (`ApprovalRequiredToolset` из pydantic-ai, один из способов). LLM с
+`apply` и без гейта будет откликаться на что попало.
 
 ---
 
-## What it covers
+## Что покрывает
 
-Every workflow a job-seeker runs, end to end.
+Каждый сценарий соискателя, от начала до конца.
 
-| workflow | tools |
+| сценарий | инструменты |
 |---|---|
-| **auth** | `session` (CLI), `whoami` |
-| **find work** | `search`, `hunt`, `recommended`, `suitable_vacancies`, `similar` |
-| **judge a vacancy** | `vacancy`, `employer`, `contacts` |
-| **apply** | `apply`, `letter_get`, `letter_set`, `cv_push` |
-| **track** | `inbox`, `sent`, `lost`, `thread_read_state` |
-| **chat** | `chats`, `chat_read`, `chat_send` |
-| **diagnose the CV** | `resume_scorecard`, `resume_views`, `resume_advice` |
-| **maintain the CV** | `resumes`, `resume_read`, `resume_experience`, `resume_exp_dates`, `resume_exp_add`, `resume_bump` |
-| **housekeeping** | `archive_application`, `snapshot_vacancy`, `snapshot_index`, `activity`, `view_vacancy` |
+| **авторизация** | `session` (CLI), `whoami` |
+| **искать работу** | `search`, `hunt`, `recommended`, `suitable_vacancies`, `similar` |
+| **оценить вакансию** | `vacancy`, `employer`, `contacts` |
+| **откликнуться** | `apply`, `letter_get`, `letter_set`, `cv_push` |
+| **отслеживать** | `inbox`, `sent`, `lost`, `thread_read_state` |
+| **переписка** | `chats`, `chat_read`, `chat_send` |
+| **диагностика резюме** | `resume_scorecard`, `resume_views`, `resume_advice` |
+| **вести резюме** | `resumes`, `resume_read`, `resume_experience`, `resume_exp_dates`, `resume_exp_add`, `resume_bump` |
+| **обслуживание** | `archive_application`, `snapshot_vacancy`, `snapshot_index`, `activity`, `view_vacancy` |
 
-The tools most worth knowing exist because hh hides them:
+Самые интересные инструменты существуют потому, что hh это прячет:
 
-- **`resume_scorecard`** — hh's own verdict on every CV beside how it performs:
-  the 7-day funnel (impressions / opens / invitations), hh's checklist of empty
-  fields, the canonical-vs-free-text skill split.
-- **`resume_views`** — which *employers* opened your CV, by name and date.
-- **`resume_advice`** — hh's own LLM critique of a CV (free).
-- **`thread_read_state`** — whether an employer has actually *read* your last
-  message. Silence after being read is a decision; before, a queue.
-- **`contacts`** — a recruiter's direct phone, where the posting publishes one.
-- **`search`** filters on hh's own vocabulary, including `label=low_performance`
-  (**fewer than 10 applicants** — the competition signal hh never shows as a
-  number) and `salary_mode` (per month / hour / shift / service).
+- **`resume_scorecard`**, оценка каждого резюме от самого hh рядом с тем, как оно
+  работает: воронка за 7 дней (показы / открытия / приглашения), список
+  незаполненных полей от hh, разбивка навыков на канонические и произвольные.
+- **`resume_views`**, какие *работодатели* открывали резюме, по названию и дате.
+- **`resume_advice`**, критика резюме от собственной LLM hh (бесплатно).
+- **`thread_read_state`**, прочитал ли работодатель ваше последнее сообщение.
+  Молчание после прочтения, это решение; до прочтения, это очередь.
+- **`contacts`**, прямой телефон рекрутёра, где вакансия его публикует.
+- **`search`** фильтрует по собственному словарю hh, включая
+  `label=low_performance` (**меньше 10 откликов**, сигнал о конкуренции, который
+  hh никогда не показывает числом) и `salary_mode` (за месяц / час / смену /
+  услугу).
 
-## Writes execute immediately
+## Записи выполняются сразу
 
-The 11 write tools: `apply`, `chat_send`, `letter_set`, `cv_push`,
+11 инструментов записи: `apply`, `chat_send`, `letter_set`, `cv_push`,
 `resume_experience`, `resume_exp_dates`, `resume_exp_add`, `resume_bump`,
-`archive_application`, `snapshot_vacancy`, `view_vacancy`. Of these,
-`snapshot_vacancy` only writes local files and `archive_application` is reversible
-(hh's own trash). The rest change your live account or reach an employer.
+`archive_application`, `snapshot_vacancy`, `view_vacancy`. Из них
+`snapshot_vacancy` пишет только локальные файлы, а `archive_application` обратим
+(это корзина самого hh). Остальные меняют ваш живой аккаунт или доходят до
+работодателя.
 
-## Errors
+## Ошибки
 
-Every failure comes back one shape, so an agent can branch on it:
+Любой сбой приходит в одной форме, чтобы агент мог по нему ветвиться:
 
 ```
 ERROR [session_expired]: HTTP 401 on an authenticated call...
@@ -159,48 +163,52 @@ ERROR [session_expired]: HTTP 401 on an authenticated call...
 FIX: Get a fresh cookie: ... python3 hh_client.py session --cookie '...'
 ```
 
-`kind` is machine-readable (`session_expired`, `session_missing`,
-`no_write_permission`, `rate_limited`, `not_found`, `hh_changed`, `bad_argument`,
-`network`); the `FIX:` line tells a human what to do.
+`kind` машиночитаем (`session_expired`, `session_missing`, `no_write_permission`,
+`rate_limited`, `not_found`, `hh_changed`, `bad_argument`, `network`); строка
+`FIX:` подсказывает человеку, что делать.
 
-## Tests
+## Тесты
 
 ```bash
-python3 tests/test_contract.py          # is this a valid MCP server (no session)
-python3 tests/test_parsers.py           # replay recorded hh responses (no session)
+python3 tests/test_contract.py          # валиден ли MCP-сервер (без сессии)
+python3 tests/test_parsers.py           # воспроизведение записанных ответов hh (без сессии)
 python3 tests/test_fixtures_are_clean.py
-python3 smoke.py                        # LIVE, read-only, needs a session
+python3 smoke.py                        # ЖИВОЙ, только чтение, нужна сессия
 ```
 
-The first three need no session, network or account: `tests/fixtures/` holds real
-responses reduced to a skeleton, so the parsers are testable by anyone who clones
-this. `smoke.py` is the only thing that notices hh changing a payload; run it on a
-schedule wherever the session lives. Re-record fixtures with
-`python3 tests/record_fixtures.py` (needs a session); it scrubs by allowlist and
-`test_fixtures_are_clean.py` fails if anything personal survives.
+Первым трём не нужны ни сессия, ни сеть, ни аккаунт: в `tests/fixtures/` лежат
+реальные ответы, сведённые к скелету, так что парсеры проверяемы у любого, кто
+склонировал репозиторий. `smoke.py`, единственное, что замечает изменение схемы
+на стороне hh; запускайте его по расписанию там, где живёт сессия. Перезаписать
+фикстуры: `python3 tests/record_fixtures.py` (нужна сессия); он чистит по
+allow-list, а `test_fixtures_are_clean.py` падает, если просочилось что-то личное.
 
-The contract tests enforce the design rules — no confirm/dry_run arguments, every
-write annotated, confusable tools cross-referencing, expensive tools carrying a
-cost signal, `required` matching the functions, and **no personal data anywhere
-in the shipped files** (that last one exists because a leak once shipped here).
+Контрактные тесты закрепляют правила: никаких аргументов confirm/dry_run, каждая
+запись аннотирована, похожие инструменты ссылаются друг на друга, дорогие несут
+сигнал о стоимости, `required` совпадает с функциями и **никаких персональных
+данных в файлах** (последнее появилось после того, как утечка однажды сюда
+попала).
 
-## Things the protocol will teach you the hard way
+## Что протокол преподаёт на собственном опыте
 
-- **A chat is not an application.** `/applicant/negotiations` only knows
-  NEGOTIATION chats. Employers who message you first create type COMMON, invisible
-  to `sent` — that is what `chats direct_only=true` is for.
-- **A resume has two identifiers.** Negotiations report a numeric `resumeId`;
-  every URL and write needs the 38-character hash. The numeric one returns an
-  empty resume that reads like a dead session.
-- **Everything pages at 20** — except `chats` (cursor) and `favorites` (no paging
-  at all). `resume_advice` has a hidden **10-tasks-per-day** quota.
-- **A 200 does not mean a parameter worked.** `?filter=ARCHIVED`, `?page=` on
-  favourites, and `search_field=name` all return 200 and are ignored. Test
-  filters against `searchCounts.value`, not the returned row count.
-- **`/search/vacancy` is throttled to a hang.** Keep it off any hot path.
+- **Чат, это не отклик.** `/applicant/negotiations` знает только чаты типа
+  NEGOTIATION. Работодатели, написавшие первыми, создают тип COMMON, невидимый для
+  `sent`, для этого и нужен `chats direct_only=true`.
+- **У резюме два идентификатора.** Negotiations сообщают числовой `resumeId`; всем
+  URL и записям нужен 38-символьный хэш. Числовой возвращает пустое резюме, что
+  выглядит как мёртвая сессия.
+- **Всё пагинируется по 20**, кроме `chats` (курсор) и `favorites` (пагинации нет
+  вовсе). У `resume_advice` есть скрытая квота **10 задач в сутки**.
+- **HTTP 200 не значит, что параметр сработал.** `?filter=ARCHIVED`, `?page=` в
+  избранном и `search_field=name` возвращают 200 и игнорируются. Проверяйте
+  фильтры по `searchCounts.value`, а не по числу строк в ответе.
+- **`/search/vacancy` задушен до зависания.** Держите его вне горячего пути.
 
-One account, at human pace. hh notices bulk behaviour.
+Один аккаунт, в человеческом темпе. hh замечает массовое поведение.
 
-## License
+## Лицензия
 
-Source-available under the **PolyForm Noncommercial License 1.0.0** (see [LICENSE.md](LICENSE.md)): free to use, run, and modify for **non-commercial** purposes. Commercial use needs a separate license — open an issue to ask.
+Исходники доступны под **PolyForm Noncommercial License 1.0.0** (см.
+[LICENSE.md](LICENSE.md)): свободно использовать, запускать и изменять в
+**некоммерческих** целях. Для коммерческого использования нужна отдельная
+лицензия, откройте issue.
