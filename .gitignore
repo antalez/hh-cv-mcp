@@ -1,0 +1,13 @@
+# THE CREDENTIAL. This file is a logged-in hh.ru browser session: 36 cookies plus
+# an xsrf token. Anyone holding it is you on hh.ru and can apply, message
+# employers and rewrite your CVs. It must never reach a repository.
+.hh_session.json
+*.hh_session.json
+
+# scratch captures from the recorder before they are scrubbed
+tests/fixtures/*.raw.json
+
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
