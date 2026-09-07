@@ -843,6 +843,28 @@ def t_chat_send(args):
     return str(hh.send_message(str(args["chat_id"]), text))
 
 
+def t_chat_leave(args):
+    """Leave chats, removing them from the messenger. Acts on call -- no gate,
+    and NOT reversible. hh exposes no chat archive, so LEAVE_CHAT is the only way
+    to clear a dead thread (a rejection) out of the chat list. Get ids from
+    `chats`; do not point this at a live conversation."""
+    ids = args.get("chat_ids") or args.get("chat_id") or []
+    if isinstance(ids, (str, int)):
+        ids = [ids]
+    if not ids:
+        raise ToolError("bad_argument", "no chat ids given",
+                        "Pass one or more chat ids as `chat_ids` (from `chats`).")
+    hh = _hh()
+    out = []
+    for cid in ids:
+        try:
+            r = hh.leave_chat(str(cid))
+            out.append(f"  left chat {cid}: HTTP {r['status']}")
+        except Exception as e:
+            out.append(f"  {cid}: {e}")
+    return "\n".join(out)
+
+
 # ------------------------------------------------------------ failure contract
 #
 # One shape for every failure, because the caller is usually a model. Prose that
@@ -918,8 +940,12 @@ def describe_failure(exc: Exception) -> str:
 # a negotiation (reversible, hh's own trash) are writes but not destructive.
 _OVERWRITES = {"letter_set", "cv_push", "resume_experience", "resume_exp_dates"}
 _SENDS_TO_EMPLOYER = {"apply", "chat_send"}
+# Irreversible account changes that are not overwrites and reach no employer text,
+# but destroy something on call: leaving a chat removes the thread from your
+# messenger with no way back (hh offers no chat archive, only this).
+_DESTROYS = {"chat_leave"}
 _OTHER_WRITES = {"resume_exp_add", "archive_application", "snapshot_vacancy",
-                 "resume_bump", "view_vacancy"}
+                 "resume_bump", "view_vacancy"} | _DESTROYS
 WRITE_TOOLS = _OVERWRITES | _SENDS_TO_EMPLOYER | _OTHER_WRITES
 
 
@@ -932,7 +958,8 @@ def annotations_for(name: str) -> dict:
         # Sending to an employer is not "overwriting" in the spec's sense, but it
         # is irreversible and reaches a third party, which is exactly the case a
         # confirmation step exists for. Flagged so clients treat it that way.
-        "destructiveHint": name in _OVERWRITES or name in _SENDS_TO_EMPLOYER,
+        "destructiveHint": (name in _OVERWRITES or name in _SENDS_TO_EMPLOYER
+                            or name in _DESTROYS),
         # Same args twice leaves the same state: reads always, and `apply`
         # because it refuses a duplicate rather than applying again.
         "idempotentHint": read_only or name in ("apply", "cv_push", "letter_set",
@@ -953,6 +980,7 @@ REQUIRED = {
     "apply":             ["vacancy_id", "resume"],
     "chat_read":         ["chat_id"],
     "chat_send":         ["chat_id", "text"],
+    "chat_leave":        ["chat_ids"],
     "cv_push":           ["resume", "variant"],
     "letter_get":        ["vacancy_id"],
     "letter_set":        ["vacancy_id", "text"],
@@ -1169,6 +1197,8 @@ TOOLS = {
                          "no_size": {"type": "boolean"}}),
     "archive_application": (t_trash, "HIDE AN APPLICATION ON HH by vacancy id or chat id, moving it to hh's own trash bucket. Reversible, and it changes YOUR ACCOUNT. Do not confuse with `snapshot_vacancy`, which only writes files to disk. Cleanup, never employer-facing.",
                         {"ids": {"type": "array", "items": {"type": "string"}}}),
+    "chat_leave":      (t_chat_leave, "LEAVE CHATS, removing them from your messenger, by chat id (from `chats`). NOT reversible and NOT the same as `archive_application`: that hides the application but leaves the chat in your messenger, because hh has no chat archive. LEAVE_CHAT is the only action that clears the thread out, so use it on dead threads (a rejection) and never on a live conversation. ACTS ON CALL.",
+                        {"chat_ids": {"type": "array", "items": {"type": "string"}}}),
     "recommended":     (t_recommended, "HH'S PERSONALISED FEED, no query needed: what hh puts on the applicant "
                         "landing page based on your CVs and behaviour. About 6 at a time, high "
                         "signal. Use `suitable_vacancies` for hh's dedicated CV matcher (far more "

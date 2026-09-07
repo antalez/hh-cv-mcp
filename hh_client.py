@@ -2179,6 +2179,37 @@ class HH:
                         "sent OK (HTTP 200), but the text was not found on readback "
                         "(the employer or a bot may have replied first). Re-check the chat."}
 
+    def leave_chat(self, chat_id: str | int) -> dict:
+        """Leave a chat, removing it from the messenger. `chat_id` from `chats()`.
+
+        hh has NO archive for a messenger chat. `trash_negotiation` hides the
+        *отклик* (the negotiation), but the chatik conversation stays in the chat
+        list: the only chat-level actions hh's own UI offers on a NEGOTIATION
+        thread are LEAVE_CHAT and DISABLE_NOTIFICATIONS (its `operations.allowed`).
+        This is LEAVE_CHAT, the one that actually clears the thread out.
+
+        Route recovered from the chatik bundle, not guessed: remote.chatik.js's
+        chunk 822 binds the leave button to `post('/chatik/api/leave', {chatId})`,
+        then navigates away and drops the chat from the store. Same host, xsrf and
+        header shape as `send_message`. NOT reversible from here: hh removes the
+        thread from your list, so use it on dead threads (a rejection), never a
+        live one. Verifying costs a full chat re-list, so the caller does that
+        once after a batch rather than this method paying it on every id.
+        """
+        if not self.session or not self.session.xsrf:
+            raise HHError("leaving a chat needs a session with _xsrf")
+        st, _, body = self._req(
+            "POST", f"{CHATIK}/chatik/api/leave", auth=True,
+            data=json.dumps({"chatId": int(chat_id)}).encode(),
+            headers={"Content-Type": "application/json",
+                     "X-XSRFToken": self.session.xsrf,
+                     "X-Requested-With": "XMLHttpRequest",
+                     "Accept": "application/json",
+                     "Origin": BASE, "Referer": f"{BASE}/chat/"})
+        if st not in (200, 201, 204):
+            raise HHError(f"leave refused (HTTP {st}): {body[:200]!r}")
+        return {"status": st, "chat_id": int(chat_id), "left": True}
+
     def letter(self, vacancy_id: str) -> dict | None:
         """The cover letter you sent for one application, with its edit state.
 
@@ -2419,6 +2450,12 @@ def _cli():
 
     tr = sub.add_parser("trash", help="archive negotiations (move to hh trash) by vacancy or chat id")
     tr.add_argument("ids", nargs="+", help="vacancy id(s) or chat id(s) to archive")
+
+    cle = sub.add_parser("chat-leave",
+                         help="LEAVE chats (remove from messenger). hh has no chat archive; "
+                              "this is the only way to clear a dead thread. NOT reversible")
+    cle.add_argument("chat_ids", nargs="+", help="chat id(s) from `chats`")
+    cle.add_argument("--yes", action="store_true", help="required: leaving cannot be undone")
 
     lt = sub.add_parser("letter", help="show or replace a sent cover letter")
     lt.add_argument("vacancy")
@@ -2823,6 +2860,27 @@ def _cli():
                 print(f"  archived {key}: topic {r['topic']}, vacancy {r['vacancy_id']}")
             except HHError as e:
                 print(f"  {key}: {e}")
+
+    elif args.cmd == "chat-leave":
+        if not args.yes:
+            print("  DRY RUN. chat-leave removes the chat from your messenger and "
+                  "CANNOT be undone. Re-run with --yes.")
+            for cid in args.chat_ids:
+                print(f"  would leave chat {cid}")
+            return
+        left = []
+        for cid in args.chat_ids:
+            try:
+                r = hh.leave_chat(cid)
+                left.append(str(cid))
+                print(f"  left chat {cid}: HTTP {r['status']}")
+            except HHError as e:
+                print(f"  {cid}: {e}")
+        if left:
+            # Verify once for the whole batch: the left chats should be gone.
+            remaining = {str(c["chat_id"]) for c in hh.chats()}
+            for cid in left:
+                print(f"  verify {cid}: {'GONE (ok)' if cid not in remaining else 'STILL LISTED'}")
 
     elif args.cmd == "letter":
         if not args.set:

@@ -92,11 +92,13 @@ def test_every_tool_declares_its_risk():
         assert ann["readOnlyHint"] is (name not in WRITES | {"archive_application",
                                                             "snapshot_vacancy",
                                                             "resume_bump",
-                                                            "view_vacancy"}), \
+                                                            "view_vacancy",
+                                                            "chat_leave"}), \
             f"{name}: readOnlyHint disagrees with whether it writes"
     for name in WRITES:
         assert listed[name]["readOnlyHint"] is False, f"{name} claims to be read-only"
-    for name in ("apply", "chat_send", "letter_set", "cv_push"):
+    # chat_leave sends no employer text but is irreversible, so it must warn too.
+    for name in ("apply", "chat_send", "letter_set", "cv_push", "chat_leave"):
         assert listed[name]["destructiveHint"] is True, \
             f"{name} does not warn clients to confirm before calling it"
 
