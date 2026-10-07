@@ -9,7 +9,7 @@ resumes, applications, cover letters, employer chat, and the analytics hh keeps
 mostly hidden.
 
 Two files, no third-party dependencies, stdio transport. Copy the folder, point
-it at a login cookie, and every tool works.
+it at a login cookie, and it works.
 
 ---
 
@@ -20,6 +20,12 @@ returns `forbidden` from every origin. But hh's own website content-negotiates t
 JSON for a client holding a login session, so **everything the site does, this
 does too, over plain HTTP**, no browser, no scraping of rendered HTML, no token.
 The protocol was reverse-engineered by measurement, not read from docs (there are none).
+
+> **This runs as your real hh account.** hh has no sandbox and no API terms
+> that cover this. Automated-looking behaviour gets an account restricted: a
+> burst of about a dozen applications in one session soft-blocked this one
+> (HTTP 403 on every authenticated route) until it cooled off. One account, at
+> human pace, with a human approving every write.
 
 ---
 
@@ -56,7 +62,7 @@ on macOS):
   "mcpServers": {
     "hh": {
       "command": "python3",
-      "args": ["/abs/path/to/mcp/server.py"],
+      "args": ["/abs/path/to/hh-cv-mcp/server.py"],
       "env": { "HH_SESSION": "/abs/path/to/.hh_session.json" }
     }
   }
@@ -72,7 +78,7 @@ wants an explicit `type`:
     "hh": {
       "type": "stdio",
       "command": "python3",
-      "args": ["/abs/path/to/mcp/server.py"],
+      "args": ["/abs/path/to/hh-cv-mcp/server.py"],
       "env": { "HH_SESSION": "/abs/path/to/.hh_session.json" }
     }
   }
@@ -82,6 +88,19 @@ wants an explicit `type`:
 Set `HH_SESSION` explicitly rather than relying on discovery, so the server works
 whatever directory the client launches it from. Restart the client, then ask it
 `whoami` to confirm the mount.
+
+### What it looks like
+
+The same functions back the CLI and the MCP tools. A posting, read in one call:
+
+```
+$ python3 hh_client.py vacancy 137853854
+Наставник курса «AI-инженер» в Практикум | Яндекс | опыт: 3-6 лет | з/п: не указана
+posted: 2026-09-28 11:42 | формат: REMOTE | занятость: PART
+skills: Python, LLM, RAG, AI Engineer
+
+Можно совмещать с основной работой (2-3 часа в день) …
+```
 
 ### Environment
 
@@ -104,7 +123,7 @@ The server's only defence is telling you the truth about what each tool does,
 through MCP annotations (`readOnlyHint` / `destructiveHint`). A good client reads
 those and asks before a destructive call.
 
-**If you point an unattended LLM at this, put an approval gate in front of the 11
+**If you point an unattended LLM at this, put an approval gate in front of the 12
 write tools.** Suspend every write for a human to confirm before it executes
 (pydantic-ai's `ApprovalRequiredToolset` is one way). An LLM with `apply` and no
 gate will apply to things.
@@ -121,8 +140,8 @@ Every workflow a job-seeker runs, end to end.
 | **find work** | `search`, `hunt`, `recommended`, `suitable_vacancies`, `similar` |
 | **judge a vacancy** | `vacancy`, `employer`, `contacts` |
 | **apply** | `apply`, `letter_get`, `letter_set`, `cv_push` |
-| **track** | `inbox`, `sent`, `lost`, `thread_read_state` |
-| **chat** | `chats`, `chat_read`, `chat_send` |
+| **track** | `inbox`, `sent`, `lost`, `thread_read_state`, `favorites` |
+| **chat** | `chats`, `chat_read`, `chat_send`, `chat_leave` |
 | **diagnose the CV** | `resume_scorecard`, `resume_views`, `resume_advice` |
 | **maintain the CV** | `resumes`, `resume_read`, `resume_experience`, `resume_exp_dates`, `resume_exp_add`, `resume_bump` |
 | **housekeeping** | `archive_application`, `snapshot_vacancy`, `snapshot_index`, `activity`, `view_vacancy` |
@@ -160,11 +179,13 @@ whole description instead of a 1500-character preview.
 
 ## Writes execute immediately
 
-The 11 write tools: `apply`, `chat_send`, `letter_set`, `cv_push`,
+The 12 write tools: `apply`, `chat_send`, `chat_leave`, `letter_set`, `cv_push`,
 `resume_experience`, `resume_exp_dates`, `resume_exp_add`, `resume_bump`,
 `archive_application`, `snapshot_vacancy`, `view_vacancy`. Of these,
 `snapshot_vacancy` only writes local files and `archive_application` is reversible
-(hh's own trash). The rest change your live account or reach an employer.
+(hh's own trash). `chat_leave` is **not** reversible: hh has no chat archive, so
+leaving removes the thread from your messenger for good. The rest change your
+live account or reach an employer.
 
 ## Errors
 
