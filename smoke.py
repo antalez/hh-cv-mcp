@@ -96,6 +96,19 @@ def smoke(verbose: bool = True) -> tuple[int, list[Check]]:
             assert key in r, f"resume lost {key!r}"
         return f"{len(r.get('experience') or [])} experience entries"
 
+    def vacancy():
+        # Pinned because it failed SILENTLY: by 2026-10 hh moved the posting to
+        # vacancyView.vacancyFull.vacancy and the old parser kept returning a
+        # title (HTML fallback) with every other field empty. A green smoke and a
+        # half-empty vacancy is the worst combination, so assert the fields.
+        rows = hh.negotiations(all_pages=False)
+        vid = next((str(r.get("vacancy_id")) for r in rows if r.get("vacancy_id")), None)
+        assert vid, "no vacancy id on the negotiations page to read"
+        v = hh.vacancy(vid)
+        for key in ("name", "company", "description", "published", "work_formats"):
+            assert v.get(key), f"vacancy lost {key!r} (page shape moved?)"
+        return f"{len(v['description'])} chars, {','.join(v['work_formats'])}"
+
     def chats():
         cs = hh.chats()
         assert isinstance(cs, list), "chats() did not return a list"
@@ -103,9 +116,14 @@ def smoke(verbose: bool = True) -> tuple[int, list[Check]]:
 
     def activity():
         a = hh.activity_score()
-        assert isinstance(a, (int, float)) or (isinstance(a, dict) and a), \
-            f"activity_score returned {type(a).__name__}"
-        return f"score={a if not isinstance(a, dict) else a.get('score', a)}"
+        assert isinstance(a, dict), f"activity_score returned {type(a).__name__}"
+        # As of 2026-10 hh stopped shipping the gauge on every applicant page we
+        # checked (/, resumes, negotiations, settings, profile) and no landing
+        # bundle references it. Say so plainly instead of printing a green
+        # "score=None" that reads like a working read.
+        if a.get("score") is None:
+            return "NOT EXPOSED by hh (score None); gauge-based logic should skip"
+        return f"score={a['score']}"
 
     def build_version():
         v = hh.static_version()
@@ -119,6 +137,7 @@ def smoke(verbose: bool = True) -> tuple[int, list[Check]]:
         ("negotiations", negotiations, "the applications list"),
         ("resumes", resumes, "list + the 38-char hash trap"),
         ("resume-read", one_resume, "one CV's editable content"),
+        ("vacancy", vacancy, "a posting's full detail, not just its title"),
         ("chats", chats, "messenger, incl. employer-initiated"),
         ("activity", activity, "the account gauge"),
     ]:

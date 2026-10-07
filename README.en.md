@@ -141,6 +141,23 @@ The tools most worth knowing exist because hh hides them:
   (**fewer than 10 applicants**, the competition signal hh never shows as a
   number) and `salary_mode` (per month / hour / shift / service).
 
+Editing a CV in place is CLI-only, deliberately: each command is a dry run
+until you add `--yes`, and none of them is exposed as an MCP tool, because the
+MCP has no confirm step and `resume-delete` cannot be undone.
+
+| CLI command | what it sets |
+|---|---|
+| `resume-about-set --resume HASH --file F` | the free-text "О себе" block |
+| `resume-skills-set --resume HASH --file F` | the key-skill chips (hh caps them at 25) |
+| `resume-field-set --resume HASH --field title --value "..."` | the CV title, or `professionalRole` ids |
+| `resume-exp-set --resume HASH --file F.json` | the whole experience list (rename, reorder, remove) |
+| `resume-delete --resume HASH` | deletes the CV. **Irreversible** |
+| `chat-edit CHAT_ID MESSAGE_ID --file F` | rewrites a message you already sent |
+
+`vacancy` also returns `work_formats` (REMOTE / HYBRID / ON_SITE) and
+`employment_form` (FULL / PART / PROJECT), and `vacancy ID --full` prints the
+whole description instead of a 1500-character preview.
+
 ## Writes execute immediately
 
 The 11 write tools: `apply`, `chat_send`, `letter_set`, `cv_push`,
@@ -197,7 +214,15 @@ in the shipped files** (that last one exists because a leak once shipped here).
 - **A 200 does not mean a parameter worked.** `?filter=ARCHIVED`, `?page=` on
   favourites, and `search_field=name` all return 200 and are ignored. Test
   filters against `searchCounts.value`, not the returned row count.
-- **`/search/vacancy` is throttled to a hang.** Keep it off any hot path.
+- **`/search/vacancy` is rate-limited.** One query answers fast; several in a
+  row can stall for minutes. Space queries out and keep it off any hot path.
+- **A parser can fail silently.** In 2026-10 hh moved the vacancy page data to
+  `vacancyView.vacancyFull.vacancy` and renamed fields. The old reader still
+  found the title (from HTML) and returned everything else empty, which looks
+  like a sparse posting, not a break. `smoke.py` now asserts the fields.
+- **The activity gauge is gone.** As of 2026-10 hh no longer ships
+  `applicantActivity` on any applicant page checked; `activity` returns
+  `score: null`. Treat that as unknown, never as zero.
 
 One account, at human pace. hh notices bulk behaviour.
 

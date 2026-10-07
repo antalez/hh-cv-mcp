@@ -543,19 +543,40 @@ class HH:
         def grab(qa):
             m = re.search(rf'data-qa="{qa}"[^>]*>(.*?)</', text, re.S)
             return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip() if m else None
-        vv = (blob.get("vacancyView") or {})
+        view = blob.get("vacancyView") or {}
+        # By 2026-10 hh nests the posting one level down, at
+        # vacancyView.vacancyFull.vacancy, with new field names. Reading the old
+        # spot returned a title (from the HTML fallback) and nothing else, which
+        # looks like a sparse posting rather than a broken parser. The old shape
+        # stays as a fallback in case hh is still serving it to some sessions.
+        vv = ((view.get("vacancyFull") or {}).get("vacancy")) or view
         desc = vv.get("description") or ""
         comp = vv.get("compensation") or {}
+        pub = vv.get("publicationTimeIso") or vv.get("publicationDate") or {}
+        published = pub.get("$") if isinstance(pub, dict) else pub
+        exp = vv.get("workExperience")
+        experience = (self.EXPERIENCE.get(exp, exp) if isinstance(exp, str)
+                      else (vv.get("experience") or {}).get("name"))
+        ks = vv.get("keySkills") or []
+        if isinstance(ks, dict):                       # old shape: {keySkill: [{name}]}
+            ks = ks.get("keySkill", [])
+        skills = [s.get("name") if isinstance(s, dict) else s for s in ks]
         return {"id": vacancy_id, "name": vv.get("name") or grab("vacancy-title"),
+                "published": published,
                 "company": ((vv.get("company") or {}).get("name")),
-                "experience": (vv.get("experience") or {}).get("name"),
+                "experience": experience,
                 "salary_from": comp.get("from"), "salary_to": comp.get("to"),
                 "currency": comp.get("currencyCode") or comp.get("currency"),
                 "gross": comp.get("gross"),
-                "skills": [s.get("name") for s in (vv.get("keySkills") or {}).get("keySkill", [])
-                           if isinstance(s, dict)] or None,
-                "description": re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", desc)).strip(),
+                "work_formats": vv.get("workFormats") or None,      # REMOTE / HYBRID / ON_SITE
+                "employment_form": vv.get("employmentForm"),       # FULL / PART / PROJECT
+                "skills": [s for s in skills if s] or None,
+                "description": html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", desc))).strip(),
                 "url": f"{BASE}/vacancy/{vacancy_id}"}
+
+    # hh's workExperience enum, rendered the way the site shows it.
+    EXPERIENCE = {"noExperience": "нет опыта", "between1And3": "1-3 года",
+                  "between3And6": "3-6 лет", "moreThan6": "более 6 лет"}
 
     def contact_info(self, vacancy_id: str) -> dict:
         """Recruiter's name and phone for a posting that publishes them.
@@ -937,6 +958,10 @@ class HH:
         it when idle ("проценты сгорают") and pays +2% per vacancy view, +8% per
         apply or call; hh's own advice is to keep it >= 80%. This is the single
         account number the owner sees, NOT the per-CV completeness in resume().
+
+        As of 2026-10 hh no longer ships `applicantActivity` on the landing page
+        (or on resumes/negotiations/settings), so this returns {"score": None}.
+        Callers must treat None as "unknown", never as 0 or as a pass.
         """
         _, _, body = self._req("GET", f"{BASE}/", auth=True)
         blob = self._state_blob(body.decode("utf-8", "replace")) or {}
@@ -1527,6 +1552,163 @@ class HH:
             out["verified"] = {"count_after": len(after),
                                "grew": len(after) == len(combined),
                                "new_present": all(i["position"] in positions for i in norm)}
+        return out
+
+    def experience_set(self, resume_id: str, entries: list[dict], *,
+                       dry_run: bool = True, verify: bool = True) -> dict:
+        """REPLACE the whole experience array (vs experience_add, which appends).
+
+        Use when entries must be renamed, reordered or removed, which
+        experience_edit (description-only) and experience_add (append-only)
+        cannot do. Same normalization and em/en-dash refusal as experience_add.
+        Dry-run by default; shows old vs new positions, and on write verifies by
+        read-back that the new positions are all present.
+        """
+        norm = []
+        for e in entries:
+            blob = (e.get("position", "") or "") + (e.get("description", "") or "") \
+                   + (e.get("company") or e.get("companyName") or "")
+            if self.refuse_dashes and any(c in blob for c in "—–"):
+                raise HHError("an experience entry contains an em/en dash "
+                              "(HH_REFUSE_DASHES is on)")
+            start = e.get("start") or e.get("startDate")
+            if not start:
+                raise HHError("each entry needs a start date (YYYY-MM-DD)")
+            if not (e.get("company") or e.get("companyName")):
+                raise HHError("each entry needs a company")
+            if not e.get("position"):
+                raise HHError("each entry needs a position")
+            norm.append({"companyName": e.get("company") or e.get("companyName"),
+                         "position": e.get("position"),
+                         "startDate": start,
+                         "endDate": e.get("end") or e.get("endDate"),
+                         "description": e.get("description") or ""})
+        cur = self.resume(resume_id)["raw"].get("experience") or []
+        if dry_run:
+            return {"dry_run": True, "current": len(cur), "setting": len(norm),
+                    "old_positions": [x.get("position") for x in cur if isinstance(x, dict)],
+                    "new_positions": [i["position"] for i in norm]}
+        res = self.resume_update(resume_id, {"experience": norm}, verify=False)
+        out = {"dry_run": False, "status": res["status"], "was": len(cur),
+               "expected": len(norm)}
+        if verify:
+            time.sleep(1.0)
+            after = self.resume(resume_id)["raw"].get("experience") or []
+            positions = [x.get("position") for x in after if isinstance(x, dict)]
+            out["verified"] = {"count_after": len(after),
+                               "matches": len(after) == len(norm),
+                               "all_present": all(i["position"] in positions for i in norm)}
+        return out
+
+    def about_set(self, resume_id: str, text: str, *,
+                  dry_run: bool = True, verify: bool = True) -> dict:
+        """Set the free-text 'О себе' field (the resume's `skills` string).
+
+        Refuses em/en dashes (when HH_REFUSE_DASHES is on). Dry-run by default;
+        verifies by read-back that the new text landed.
+        """
+        if self.refuse_dashes and any(c in text for c in "—–"):
+            raise HHError("about text contains an em/en dash (HH_REFUSE_DASHES is on)")
+
+        def _t(v):
+            return (v[0]["string"] if isinstance(v, list) and v and isinstance(v[0], dict)
+                    and "string" in v[0] else (v or ""))
+        cur = _t(self.resume(resume_id)["raw"].get("skills"))
+        if dry_run:
+            return {"dry_run": True, "current_len": len(cur), "new_len": len(text)}
+        res = self.resume_update(resume_id, {"skills": [text]}, verify=False)
+        out = {"dry_run": False, "status": res["status"]}
+        if verify:
+            time.sleep(1.0)
+            after = _t(self.resume(resume_id)["raw"].get("skills"))
+            out["verified"] = {"matches": after.strip() == text.strip(), "len_after": len(after)}
+        return out
+
+    def delete_resume(self, resume_id: str, *, dry_run: bool = True) -> dict:
+        """PERMANENTLY delete a resume. IRREVERSIBLE.
+
+        Contract recovered from hh's own frontend bundle:
+        POST /applicant/deleteresume, multipart form {hash, hhtmFrom, hhtmSource} (+
+        _xsrf), url params from=resume-delete & hhtmFromLabel=resume-delete. Dry-run
+        confirms the resume exists and returns its title; on write, verifies it is
+        gone from resumes().
+        """
+        if not self.session or not self.session.xsrf:
+            raise HHError("deleting a resume needs a session with _xsrf")
+        existing = {r.get("hash"): r for r in self.resumes()}
+        target = existing.get(resume_id)
+        if dry_run:
+            return {"dry_run": True, "exists": target is not None,
+                    "title": (target or {}).get("title"), "hash": resume_id}
+        if not target:
+            raise HHError(f"resume {resume_id[:8]} not found on the account; refusing to delete")
+        boundary = "----WebKitFormBoundary" + uuid.uuid4().hex[:16]
+        parts = {"_xsrf": self.session.xsrf, "hash": resume_id,
+                 "hhtmFrom": "resume_list", "hhtmSource": "resume_list"}
+        chunks = [f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n"
+                  for k, v in parts.items()]
+        chunks.append(f"--{boundary}--\r\n")
+        data = "".join(chunks).encode()
+        url = f"{BASE}/applicant/deleteresume?from=resume-delete&hhtmFromLabel=resume-delete"
+        st, _, body = self._req("POST", url, auth=True, data=data,
+                                headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
+                                         "X-Requested-With": "XMLHttpRequest",
+                                         "Referer": f"{BASE}/applicant/resumes", "Origin": BASE})
+        if st not in (200, 201, 204):
+            raise HHError(f"delete refused (HTTP {st}): {body[:200]!r}")
+        time.sleep(1.0)
+        after = {r.get("hash") for r in self.resumes()}
+        return {"status": st, "deleted": resume_id, "title": target.get("title"),
+                "gone": resume_id not in after}
+
+    def keyskills_set(self, resume_id: str, skills: list[str], *,
+                      dry_run: bool = True, verify: bool = True) -> dict:
+        """Set the keySkills tag chips (array of strings). Refuses em/en dashes."""
+        skills = [s.strip() for s in skills if s and s.strip()]
+        if self.refuse_dashes and any(c in " ".join(skills) for c in "—–"):
+            raise HHError("a key skill contains an em/en dash (HH_REFUSE_DASHES is on)")
+
+        def _flat(k):
+            if isinstance(k, dict) and "keySkill" in k:
+                return [(x.get("string") if isinstance(x, dict) else x) for x in k["keySkill"]]
+            if isinstance(k, list):
+                return [(x.get("string") if isinstance(x, dict) else x) for x in k]
+            return []
+        cur = _flat(self.resume(resume_id)["raw"].get("keySkills"))
+        if dry_run:
+            return {"dry_run": True, "current": cur, "setting": skills,
+                    "added": [s for s in skills if s not in cur],
+                    "removed": [s for s in cur if s not in skills]}
+        res = self.resume_update(resume_id, {"keySkills": skills}, verify=False)
+        out = {"dry_run": False, "status": res["status"], "count": len(skills)}
+        if verify:
+            time.sleep(1.0)
+            after = _flat(self.resume(resume_id)["raw"].get("keySkills"))
+            out["verified"] = {"count_after": len(after),
+                               "all_present": all(s in after for s in skills)}
+        return out
+
+    def field_set(self, resume_id: str, field: str, value: str, *,
+                  dry_run: bool = True, verify: bool = True) -> dict:
+        """Set a scalar resume field. `title` (text) or `professionalRole`
+        (comma-separated role ids, written as [{"string": id}, ...])."""
+        ALLOWED = {"title", "professionalRole"}
+        if field not in ALLOWED:
+            raise HHError(f"field_set supports {ALLOWED}, not {field!r}")
+        if field == "professionalRole":
+            payload = [int(x) for x in str(value).replace(" ", "").split(",") if x]
+        else:
+            if self.refuse_dashes and any(c in str(value) for c in "—–"):
+                raise HHError("value contains an em/en dash (HH_REFUSE_DASHES is on)")
+            payload = [value]
+        cur = self.resume(resume_id)["raw"].get(field)
+        if dry_run:
+            return {"dry_run": True, "field": field, "current": cur, "payload": payload}
+        res = self.resume_update(resume_id, {field: payload}, verify=False)
+        out = {"dry_run": False, "status": res["status"], "field": field}
+        if verify:
+            time.sleep(1.0)
+            out["after"] = self.resume(resume_id)["raw"].get(field)
         return out
 
     # --------------------------------------------------------- resume portfolio
@@ -2357,6 +2539,8 @@ def _cli():
                     help="skip the employer open-role lookup (faster, no size gate)")
 
     v = sub.add_parser("vacancy"); v.add_argument("id")
+    v.add_argument("--full", action="store_true",
+                   help="print the whole description, not the 1500-char preview")
 
     ct = sub.add_parser("contacts", help="recruiter's direct fio/phone/email from the "
                                           "vacancy page, when hh ships it (often empty)")
@@ -2414,6 +2598,33 @@ def _cli():
                     help="JSON list of {company,position,start,end,description}")
     ra.add_argument("--yes", action="store_true", help="required to write; without it, dry run")
 
+    rset = sub.add_parser("resume-exp-set",
+                          help="REPLACE the whole experience array from a JSON file (rename/reorder/remove)")
+    rset.add_argument("--resume", required=True, help="resume HASH, not the numeric id")
+    rset.add_argument("--file", required=True,
+                      help="JSON list of {company,position,start,end,description}")
+    rset.add_argument("--yes", action="store_true", help="required to write; without it, dry run")
+
+    rab = sub.add_parser("resume-about-set", help="set the free-text 'О себе' field from a text file")
+    rab.add_argument("--resume", required=True, help="resume HASH, not the numeric id")
+    rab.add_argument("--file", required=True, help="text file with the 'О себе' content")
+    rab.add_argument("--yes", action="store_true", help="required to write; without it, dry run")
+
+    rdel = sub.add_parser("resume-delete", help="PERMANENTLY delete a resume (IRREVERSIBLE)")
+    rdel.add_argument("--resume", required=True, help="resume HASH to delete")
+    rdel.add_argument("--yes", action="store_true", help="required: deletion cannot be undone")
+
+    rks = sub.add_parser("resume-skills-set", help="set the keySkills tag chips from a comma/newline list")
+    rks.add_argument("--resume", required=True, help="resume HASH, not the numeric id")
+    rks.add_argument("--file", required=True, help="file of skills, one per line or comma-separated")
+    rks.add_argument("--yes", action="store_true", help="required to write; without it, dry run")
+
+    rfs = sub.add_parser("resume-field-set", help="set a scalar field: title (text) or professionalRole (ids)")
+    rfs.add_argument("--resume", required=True, help="resume HASH, not the numeric id")
+    rfs.add_argument("--field", required=True, choices=["title", "professionalRole"])
+    rfs.add_argument("--value", required=True, help="title text, or comma-separated role ids")
+    rfs.add_argument("--yes", action="store_true", help="required to write; without it, dry run")
+
     sub.add_parser("resumes", help="all CVs on the account, with their hashes")
     sub.add_parser("activity", help="account activity gauge (Ваша активность); keep >= 80%%")
     sub.add_parser("recommended", help="hh's personalized vacancy feed (your landing page)")
@@ -2447,6 +2658,12 @@ def _cli():
     cs.add_argument("chat_id")
     cs.add_argument("--file", required=True, help="file holding the message text")
     cs.add_argument("--yes", action="store_true", help="actually send; without it, dry run")
+
+    ce = sub.add_parser("chat-edit", help="rewrite an already-sent chat message in place")
+    ce.add_argument("chat_id")
+    ce.add_argument("message_id")
+    ce.add_argument("--file", required=True, help="file holding the new message text")
+    ce.add_argument("--yes", action="store_true", help="actually edit; without it, dry run")
 
     tr = sub.add_parser("trash", help="archive negotiations (move to hh trash) by vacancy or chat id")
     tr.add_argument("ids", nargs="+", help="vacancy id(s) or chat id(s) to archive")
@@ -2571,8 +2788,12 @@ def _cli():
                  f"{' gross' if d.get('gross') else ' net' if d.get('gross') is False else ''}".strip("- ").strip()
                  if (d.get('salary_from') or d.get('salary_to')) else "не указана")
         print(f"{d['name']} | {d['company']} | опыт: {d['experience']} | з/п: {money}")
+        print(f"posted: {(d.get('published') or '?')[:16].replace('T', ' ')}"
+              f" | формат: {', '.join(d.get('work_formats') or []) or '?'}"
+              f" | занятость: {d.get('employment_form') or '?'}")
         print(f"skills: {', '.join(d['skills'] or []) or '-'}\n")
-        print((d["description"] or "")[:1500])
+        desc = d["description"] or ""
+        print(desc if args.full else desc[:1500])
     elif args.cmd == "contacts":
         c = hh.contact_info(args.id)
         if not (c["fio"] or c["phone"] or c["email"]):
@@ -2693,6 +2914,35 @@ def _cli():
     elif args.cmd == "resume-exp-add":
         entries = json.loads(Path(args.file).read_text())
         res = hh.experience_add(args.resume, entries, dry_run=not args.yes)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        if not args.yes:
+            print("\ndry run: re-run with --yes to write", file=sys.stderr)
+    elif args.cmd == "resume-exp-set":
+        entries = json.loads(Path(args.file).read_text())
+        res = hh.experience_set(args.resume, entries, dry_run=not args.yes)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        if not args.yes:
+            print("\ndry run: re-run with --yes to write", file=sys.stderr)
+    elif args.cmd == "resume-about-set":
+        text = Path(args.file).read_text(encoding="utf-8").strip()
+        res = hh.about_set(args.resume, text, dry_run=not args.yes)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        if not args.yes:
+            print("\ndry run: re-run with --yes to write", file=sys.stderr)
+    elif args.cmd == "resume-delete":
+        res = hh.delete_resume(args.resume, dry_run=not args.yes)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        if not args.yes:
+            print("\nDRY RUN. resume-delete is IRREVERSIBLE. re-run with --yes to delete.", file=sys.stderr)
+    elif args.cmd == "resume-skills-set":
+        raw = Path(args.file).read_text(encoding="utf-8")
+        skills = [s.strip() for s in raw.replace("\n", ",").split(",") if s.strip()]
+        res = hh.keyskills_set(args.resume, skills, dry_run=not args.yes)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        if not args.yes:
+            print("\ndry run: re-run with --yes to write", file=sys.stderr)
+    elif args.cmd == "resume-field-set":
+        res = hh.field_set(args.resume, args.field, args.value, dry_run=not args.yes)
         print(json.dumps(res, ensure_ascii=False, indent=2))
         if not args.yes:
             print("\ndry run: re-run with --yes to write", file=sys.stderr)
@@ -2836,6 +3086,7 @@ def _cli():
         text = Path(args.file).read_text(encoding="utf-8").strip()
         if not text:
             sys.exit("refusing to send an empty message")
+
         cur = hh.chat(args.chat_id)
         if not cur["write_allowed"]:
             sys.exit("this chat does not accept messages (write_allowed is false)")
@@ -2852,6 +3103,23 @@ def _cli():
                   f"| message_id={r['message_id']}")
             if r.get("note"):
                 print(f"  note: {r['note']}")
+
+    elif args.cmd == "chat-edit":
+        text = Path(args.file).read_text(encoding="utf-8").strip()
+        if not text:
+            sys.exit("refusing to save an empty message")
+
+        print(f"  --- editing message {args.message_id} in chat {args.chat_id} ---")
+        print("  " + text.replace("\n", "\n  "))
+        if not args.yes:
+            print("\n  DRY RUN. re-run with --yes to save.")
+        else:
+            r = hh.edit_message(args.message_id, text)
+            cur = hh.chat(args.chat_id)
+            match = any(str(m.get("id")) == str(args.message_id)
+                        and (m.get("text") or "").strip() == text
+                        for m in cur.get("messages", []))
+            print(f"\n  saved: HTTP {r['status']} | message_id={r['message_id']} | verified={match}")
 
     elif args.cmd == "trash":
         for key in args.ids:
