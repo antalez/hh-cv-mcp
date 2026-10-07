@@ -610,18 +610,25 @@ class HH:
             d = json.loads(body.decode("utf-8", "replace"))
         except ValueError:
             d = {}
-        phones = []
+        phones, pending = [], []
         for p in (d.get("phones") or []):
+            # A PENDING proxy arrives as country code only ("+7  "): hh has not
+            # minted the number yet. Joining the parts used to report "7" as if
+            # it were a phone, so a number counts only when it has digits past
+            # the country code. The state is still surfaced so callers know why.
+            if not (p.get("city") or p.get("number")):
+                pending.append(p.get("virtualPhoneState"))
+                continue
             digits = " ".join(str(p.get(k) or "") for k in ("country", "city", "number")).strip()
-            if digits:
-                phones.append({"number": digits,
-                               "comment": p.get("comment"),
-                               "virtual_phone_state": p.get("virtualPhoneState")})
+            phones.append({"number": digits,
+                           "comment": p.get("comment"),
+                           "virtual_phone_state": p.get("virtualPhoneState")})
         return {"id": vacancy_id,
                 "fio": d.get("fio"),
                 "email": d.get("email"),
                 "phone": phones[0]["number"] if phones else None,
                 "phones": phones,
+                "phone_pending": (pending[0] if pending and not phones else None),
                 # kept so callers that predate the rewrite keep working
                 "call_tracking": (phones[0]["virtual_phone_state"] != "NONE"
                                   if phones else None)}
@@ -2797,9 +2804,11 @@ def _cli():
     elif args.cmd == "contacts":
         c = hh.contact_info(args.id)
         if not (c["fio"] or c["phone"] or c["email"]):
-            print("no contactInfo on this posting (common when a screening bot runs it)")
+            print("the employer did not publish contacts on this posting (showContact is off)")
         else:
-            print(f"fio: {c['fio'] or '-'}\nphone: {c['phone'] or '-'}"
+            phone = c["phone"] or (f"not issued yet (hh call-tracking number {c['phone_pending']})"
+                                   if c.get("phone_pending") else "-")
+            print(f"fio: {c['fio'] or '-'}\nphone: {phone}"
                   f"  (call_tracking={c['call_tracking']})\nemail: {c['email'] or '-'}")
     elif args.cmd == "similar":
         res = hh.similar_vacancies(args.id, limit=args.limit)
